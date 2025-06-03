@@ -1,0 +1,107 @@
+// ===== CONFIGURATION - CORRECTED VALUES =====
+String merchantId = 'your marchent Id';                
+String keyId = 'your key id';       
+String secretKey = 'your shared secret key';        
+String transactionId = 'transsection id of payment'; 
+// ============================================
+
+// Generate current date in RFC 7231 GMT format
+String getCurrentDate() {
+    return Datetime.now().formatGmt('EEE, dd MMM yyyy HH:mm:ss z');
+}
+
+// Generate SHA-256 Digest
+String generateDigest(String requestBody) {
+    Blob hash = Crypto.generateDigest('SHA-256', Blob.valueOf(requestBody));
+    return 'SHA-256=' + EncodingUtil.base64Encode(hash);
+}
+
+// Generate CyberSource Signature 
+
+String generateSignature(String keyId, String secretKey, String httpMethod, String endpoint, String digest, String dateStr) {
+    String host = 'apitest.cybersource.com';
+    String requestTarget = httpMethod.toLowerCase() + ' ' + endpoint;  // Removed .toLowerCase() from endpoint
+   
+    // Build signature string - CORRECTED ORDER (matches website)
+    List<String> signatureComponents = new List<String>{
+        'host: ' + host,
+        'v-c-date: ' + dateStr,           
+        '(request-target): ' + requestTarget,
+        'digest: ' + digest,
+        'v-c-merchant-id: ' + merchantId
+    };
+    String signatureString = String.join(signatureComponents, '\n');
+   
+    // Calculate HMAC-SHA256
+    Blob hmac = Crypto.generateMac('HmacSHA256', Blob.valueOf(signatureString), EncodingUtil.base64Decode(secretKey));
+    String signature = EncodingUtil.base64Encode(hmac);
+   
+    // Build signature header - USE KEY ID, NOT MERCHANT ID
+    return 'keyid="' + keyId +
+           '", algorithm="HmacSHA256"' +
+           ', headers="host v-c-date (request-target) digest v-c-merchant-id"' +  // Updated header list
+           ', signature="' + signature + '"';
+}
+
+
+try {
+
+    String endpoint = '/pts/v2/payments/' + transactionId + '/voids';
+    String requestBody = '{"clientReferenceInformation":{"code":"Test_void_123"}}';
+    String dateStr = getCurrentDate();
+    String digest = generateDigest(requestBody);
+    String signature = generateSignature(keyId, secretKey, 'POST', endpoint, digest, dateStr);
+   
+    // Debug the signature components
+    System.debug('=== SIGNATURE DEBUG ===');
+    System.debug('Host: apitest.cybersource.com');
+    System.debug('Date: ' + dateStr);
+    System.debug('Request Target: post ' + endpoint);
+    System.debug('Digest: ' + digest);
+    System.debug('Merchant ID: ' + merchantId);
+    System.debug('Key ID: ' + keyId);
+    System.debug('Generated Signature: ' + signature);
+    System.debug('======================');
+   
+    // Set headers
+    Map<String, String> headers = new Map<String, String>{
+        'Host' => 'apitest.cybersource.com',
+        'v-c-date' => dateStr,
+        'Digest' => digest,
+        'v-c-merchant-id' => merchantId,
+        'Signature' => signature,
+        'Content-Type' => 'application/json'
+    };
+   
+    // Create HTTP request
+    HttpRequest req = new HttpRequest();
+    req.setEndpoint('https://apitest.cybersource.com' + endpoint);
+    req.setMethod('POST');
+    req.setBody(requestBody);
+   
+    // Set all headers
+    for (String key : headers.keySet()) {
+        req.setHeader(key, headers.get(key));
+        System.debug('Header: ' + key + ' = ' + headers.get(key));
+    }
+   
+    // Send request
+    Http http = new Http();
+    HTTPResponse res = http.send(req);
+   
+    // Process response
+    System.debug('=== RESPONSE ===');
+    System.debug('Status Code: ' + res.getStatusCode());
+    System.debug('Response Body: ' + res.getBody());
+    System.debug('================');
+   
+    if (res.getStatusCode() == 201 || res.getStatusCode() == 200) {
+        System.debug('✅ Void request successful');
+    } else {
+        System.debug('❌ Void request failed');
+    }
+   
+} catch (Exception e) {
+    System.debug('❌ Error making Void API call: ' + e.getMessage());
+    System.debug('Stack Trace: ' + e.getStackTraceString());
+}
